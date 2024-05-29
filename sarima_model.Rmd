@@ -1,0 +1,134 @@
+---
+title: "SARIMA model"
+author: "Paula Corbatón Álvarez"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(arrow)
+library(dplyr)
+library(ggcorrplot)
+library(corrplot)
+library(forecast)
+library(purrr)
+
+library(ggplot2)
+library(heatmaply)
+library(pheatmap)
+library(GGally)
+```
+
+
+```{r}
+train_data <- arrow::read_parquet("train_data.parquet")
+```
+
+# Convert variables 
+
+```{r}
+train_data$date <- as.Date(train_data$date, format = "%d/%m/%y")
+```
+
+# Corplot 
+
+```{r}
+
+variables_of_interest <- c("phase", "dayweek", "month", "wd_perc", "hospital_rate", 
+                            "n_nwd_bef", "n_nwd_aft", "n_weekday_0", "n_weekday_1", 
+                            "n_weekday_2", "n_weekday_3", "n_weekday_4", "wd", 
+                            "wd_left", "monthly")
+
+# Calcular la matriz de correlación para el pais
+correlation_matrix <- cor(train_data[variables_of_interest])
+corrplot1 <- ggcorrplot(correlation_matrix, colors = c("lightblue", "white", "lightcoral"), title = "Correlation Plot", lab = TRUE, lab_size = 2, tl.cex = 8)
+
+print(corrplot1)
+```
+
+# Split data by country and select one
+
+```{r}
+split_data <- split(train_data, list(train_data$country))
+Zamunda <- split_data[["Zamunda"]]
+```
+
+## Clean na 
+
+```{r}
+original_rows_na <- nrow(Zamunda)
+Zamunda <- na.omit(Zamunda)
+remaining_rows_na <- nrow(Zamunda)
+omitted_rows_na <- original_rows_na - remaining_rows_na
+cat("Original rows:", original_rows_na, "\n")
+cat("Remaining rows after omitting missing values:", remaining_rows_na, "\n")
+cat("Omitted rows:", omitted_rows_na, "\n")
+```
+
+
+## Delete outliers ✅ proven to improve sarima: 
+
+```{r}
+remove_outliers <- function(df) {
+  # Iterar sobre columnas numéricas
+  for (col in names(df)) {
+    if (is.numeric(df[[col]])) {
+      # Calcular el rango intercuartílico (IQR)
+      iqr <- IQR(df[[col]])
+      
+      # Definir los límites para identificar outliers
+      lower_limit <- quantile(df[[col]])[2] - 1.5 * iqr
+      upper_limit <- quantile(df[[col]])[4] + 1.5 * iqr
+      
+      # Filtrar los datos para eliminar outliers
+      df <- df[df[[col]] >= lower_limit & df[[col]] <= upper_limit, ]
+    }
+  }
+  
+  return(df)
+}
+```
+
+```{r}
+Zamunda_sin_outliers <- remove_outliers(Zamunda)
+```
+
+
+## SARIMA (Seasonal AutoRegressive Integrated Moving Average) 
+
+Time-based split (training on data from 2013-2020)
+```{r}
+train_data <- Zamunda[Zamunda$date < as.Date("2021-01-01"), ]
+validation_data <- Zamunda[Zamunda$date >= as.Date("2021-01-01"), ]
+```
+
+Train SARIMA model
+```{r}
+sarima_model <- auto.arima(train_data$phase, seasonal = TRUE)
+```
+
+Evaluation
+Forecast using the trained model
+```{r}
+forecast_values <- forecast(sarima_model, h = nrow(validation_data))
+```
+
+Evaluate performance using chosen metrics
+```{r}
+performance_metric <- accuracy(forecast_values, x = validation_data$phase)
+```
+
+
+```{r}
+print(performance_metric)
+```
+
+
+
+
+
+
+
+
+
